@@ -3,13 +3,14 @@
 #![feature(custom_derive)]
 
 extern crate html5ever;
+extern crate kuchiki;
 extern crate rayon;
 extern crate reqwest;
 extern crate rocket;
 extern crate rocket_contrib;
 extern crate rss;
-extern crate scraper;
 
+use kuchiki::Selectors;
 use rayon::prelude::*;
 use rocket::http::RawStr;
 use rocket::request::FromFormValue;
@@ -18,7 +19,6 @@ use rocket::response::Failure;
 use rocket::{Request, State};
 use rocket_contrib::Template;
 use rss::Channel;
-use scraper::Selector;
 use std::io::BufReader;
 
 const NAME: &'static str = env!("CARGO_PKG_NAME");
@@ -35,15 +35,15 @@ struct HTTPClient {
   client: reqwest::Client,
 }
 
-struct CSSSelector(Selector);
+struct CSSSelector(Selectors);
 
 impl<'v> FromFormValue<'v> for CSSSelector {
   type Error = &'v RawStr;
 
   fn from_form_value(form_value: &'v RawStr) -> Result<CSSSelector, &'v RawStr> {
     match form_value.url_decode() {
-      Ok(decoded) => match Selector::parse(&decoded) {
-        Ok(selector) => Ok(CSSSelector(selector)),
+      Ok(decoded) => match Selectors::compile(&decoded) {
+        Ok(selectors) => Ok(CSSSelector(selectors)),
         _ => Err(form_value),
       },
       _ => Err(form_value),
@@ -95,24 +95,20 @@ fn refurb(
               Err(_error) => return,
               Ok(text) => {
                 println!("Got response text");
-                use html5ever::tendril::TendrilSink;
+                use kuchiki::traits::TendrilSink;
                 use std::default::Default;
 
-                let source_document = html5ever::driver::parse_document(
-                  scraper::Html::new_document(),
-                  html5ever::driver::ParseOpts {
-                    tree_builder: html5ever::tree_builder::TreeBuilderOpts {
-                      scripting_enabled: false,
-                      ..Default::default()
-                    },
+                let source_document = kuchiki::parse_html_with_options(kuchiki::ParseOpts {
+                  tree_builder: html5ever::tree_builder::TreeBuilderOpts {
+                    scripting_enabled: false,
                     ..Default::default()
                   },
-                ).one(text);
+                  ..Default::default()
+                }).one(text);
 
                 println!("Parsed document");
 
-                let selection: Vec<String> = source_document
-                  .select(&configuration.description_selector.0)
+                let selection: Vec<String> = configuration.description_selector.0.filter(source_document.inclusive_descendants())
                   .map(|element| element.html())
                   .collect();
 
